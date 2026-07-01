@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Water Station — Refill Alerts</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --panel-2: #273449;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --ok: #22c55e;
+        --low: #ef4444;
+        --stale: #f59e0b;
+        --accent: #38bdf8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        padding: 20px 28px;
+        border-bottom: 1px solid #334155;
+        display: flex;
+        align-items: baseline;
+        gap: 16px;
+      }
+      header h1 { font-size: 20px; margin: 0; }
+      header .sub { color: var(--muted); font-size: 13px; }
+      .badge {
+        margin-left: auto;
+        background: var(--low);
+        color: white;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .badge.zero { background: #334155; color: var(--muted); }
+      main { padding: 24px 28px; display: grid; gap: 28px; max-width: 1100px; }
+      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+      .card {
+        background: var(--panel);
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .card.low { border-color: var(--low); box-shadow: 0 0 0 1px var(--low); }
+      .card.stale { border-color: var(--stale); }
+      .card .name { font-weight: 600; margin-bottom: 4px; }
+      .card .dev { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+      .bar { height: 10px; background: var(--panel-2); border-radius: 6px; overflow: hidden; }
+      .bar > span { display: block; height: 100%; background: var(--accent); transition: width .4s ease; }
+      .bar.low > span { background: var(--low); }
+      .row { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; }
+      .status { font-size: 12px; font-weight: 600; text-transform: uppercase; }
+      .status.ok { color: var(--ok); }
+      .status.low { color: var(--low); }
+      .status.stale { color: var(--stale); }
+      .status.unknown { color: var(--muted); }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #334155; font-size: 14px; }
+      th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+      tr.acked { opacity: .5; }
+      button {
+        background: var(--accent);
+        color: #06283d;
+        border: 0;
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled { background: #334155; color: var(--muted); cursor: default; }
+      .empty { color: var(--muted); font-style: italic; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>💧 Refill Alerts</h1>
+      <span class="sub">Live client water levels</span>
+      <span class="badge zero" id="alertBadge">0 open alerts</span>
+    </header>
+    <main>
+      <section>
+        <h2>Needs a refill</h2>
+        <div id="alerts"></div>
+      </section>
+      <section>
+        <h2>All clients</h2>
+        <div class="grid" id="clients"></div>
+      </section>
+    </main>
+
+    <script>
+      const fmtAgo = (ts) => {
+        if (!ts) return "—";
+        const s = Math.round((Date.now() - ts) / 1000);
+        if (s < 60) return s + "s ago";
+        if (s < 3600) return Math.round(s / 60) + "m ago";
+        return Math.round(s / 3600) + "h ago";
+      };
+
+      async function ack(id, btn) {
+        btn.disabled = true;
+        await fetch(`/api/alerts/${id}/ack`, { method: "POST" });
+        refresh();
+      }
+      window.ack = ack;
+
+      function renderClients(clients) {
+        const el = document.getElementById("clients");
+        if (!clients.length) {
+          el.innerHTML = '<p class="empty">No sensors reporting yet. Start the simulator.</p>';
+          return;
+        }
+        el.innerHTML = clients
+          .sort((a, b) => (a.latest?.level ?? 999) - (b.latest?.level ?? 999))
+          .map((c) => {
+            const lvl = c.latest?.level ?? 0;
+            const low = c.status === "low";
+            return `
+              <div class="card ${c.status}">
+                <div class="name">${c.name}</div>
+                <div class="dev">${c.deviceId}</div>
+                <div class="bar ${low ? "low" : ""}"><span style="width:${lvl}%"></span></div>
+                <div class="row"><span>${lvl.toFixed(0)}% full</span><span class="status ${c.status}">${c.status}</span></div>
+                <div class="row"><span>threshold ${c.thresholdPct}%</span><span>${fmtAgo(c.latest?.ts)}</span></div>
+              </div>`;
+          })
+          .join("");
+      }
+
+      function renderAlerts(alerts) {
+        const open = alerts.filter((a) => !a.ackedAt);
+        const badge = document.getElementById("alertBadge");
+        badge.textContent = `${open.length} open alert${open.length === 1 ? "" : "s"}`;
+        badge.classList.toggle("zero", open.length === 0);
+
+        const el = document.getElementById("alerts");
+        if (!alerts.length) {
+          el.innerHTML = '<p class="empty">No alerts yet. Everyone has water.</p>';
+          return;
+        }
+        el.innerHTML = `
+          <table>
+            <thead><tr><th>Client</th><th>Level</th><th>Raised</th><th>Action</th></tr></thead>
+            <tbody>
+              ${alerts
+                .map(
+                  (a) => `
+                <tr class="${a.ackedAt ? "acked" : ""}">
+                  <td>${a.clientName}</td>
+                  <td>${a.level.toFixed(0)}% (≤ ${a.thresholdPct}%)</td>
+                  <td>${fmtAgo(a.raisedAt)}</td>
+                  <td>${
+                    a.ackedAt
+                      ? "dispatched " + fmtAgo(a.ackedAt)
+                      : `<button onclick="ack('${a.id}', this)">Dispatch refill</button>`
+                  }</td>
+                </tr>`,
+                )
+                .join("")}
+            </tbody>
+          </table>`;
+      }
+
+      async function refresh() {
+        try {
+          const [c, a] = await Promise.all([
+            fetch("/api/clients").then((r) => r.json()),
+            fetch("/api/alerts").then((r) => r.json()),
+          ]);
+          renderClients(c.clients);
+          renderAlerts(a.alerts);
+        } catch {
+          // transient — next tick retries
+        }
+      }
+
+      refresh();
+      setInterval(refresh, 2000);
+    </script>
+  </body>
+</html>
