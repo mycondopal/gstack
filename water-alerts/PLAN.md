@@ -25,22 +25,35 @@ Same play as smart propane monitors (Tank Utility) and smart heating-oil sensors
 Build order follows risk: software first (done), then a **single** hardware
 prototype, then a 5–10 unit field pilot, only then scale.
 
-## Sensing options (pick per container type)
+## Sensing: load cell (chosen)
 
-- **Load cell / weigh scale** — put the jug/bottle on a scale, infer level from
-  weight. Best for **swappable 5-gallon jugs** on coolers. Robust, no contact
-  with water, survives jug swaps. Recommended default for the cooler use case.
-- **Hydrostatic pressure sensor** — reads water height at the bottom of a
-  **fixed tank**. Clean level mapping, but assumes a permanent, known-geometry
-  tank. Good for reservoirs, not swappable jugs.
-- **Ultrasonic distance** — measures air gap above the water from the top.
-  No water contact, works across container shapes, but needs a stable mount and
-  clear line of sight.
-- **Float switch** — dead simple, cheap, but binary (above/below one point), no
-  gradual level. Fine as a v0 "it's low" trigger.
+**Decision: a load cell (weigh scale) under the jug.** The bottle sits on a
+platform with a load cell; it reports total weight, and the service converts
+weight to level via a per-client calibration (empty + full). Why this over the
+alternatives:
 
-The server already abstracts all of these to a single `level` percentage, so the
-sensing choice can change without touching the app.
+- **Load cell / weigh scale (chosen)** — robust, no contact with water, and it
+  survives the jug being swapped out (the defining trait of the 5-gallon cooler
+  use case). Cheap HX711 amplifier + a bar load cell is a well-trodden path.
+- **Hydrostatic pressure sensor** — reads water height in a **fixed tank**. Clean
+  mapping, but assumes a permanent known-geometry tank, not a swappable jug.
+- **Ultrasonic distance** — measures the air gap from the top; needs a stable
+  mount and clear line of sight.
+- **Float switch** — dead simple but binary (one trip point), no gradual level.
+
+The device only ever reports raw `weightG`; the app owns calibration and the
+level math. So the threshold or calibration can change with zero firmware
+updates, and we could swap the sensing method later without touching firmware.
+
+### Hardware sketch (load cell path)
+
+- **Load cell + HX711** 24-bit amplifier under the bottle platform.
+- **MCU**: ESP32 (has deep-sleep; wake on interval, read, transmit, sleep).
+- **Connectivity**: LTE-M module (see below) so there's no WiFi setup.
+- **Power**: battery; deep-sleep between readings is what makes a year of life
+  plausible. Report every ~15–30 min, not continuously.
+- **Calibration**: one-time "Set empty / Set full" from the dashboard at install
+  (already built), stored server-side against the deviceId.
 
 ## Connectivity — the make-or-break
 
@@ -57,13 +70,14 @@ Recommendation for a delivery business with scattered clients: **LTE-M**.
 
 ## Suggested build sequence
 
-1. **✅ Software MVP (this).** Ingest → threshold → alert → dashboard, fake sensor.
-2. **Auth + multi-station.** Right now anyone can POST. Add a device API key per
+1. **✅ Software MVP (this).** Weight ingest → calibration → threshold → alert →
+   dashboard + live push, fake load-cell sensor.
+2. **✅ Push notifications (this).** Live browser push via `/api/stream`, plus an
+   `ALERT_WEBHOOK` sink for SMS/Slack/ntfy. Native APNs/FCM added with a mobile app.
+3. **Auth + multi-station.** Right now anyone can POST. Add a device API key per
    sensor and a login for the station dashboard before any real device ships.
-3. **Notifications.** SMS/push/email to the driver when an alert fires. The
-   dashboard is the record; the notification is what actually triggers dispatch.
-4. **One hardware prototype.** ESP32 + chosen sensor + LTE-M modem. POST the same
-   `/api/readings` contract. Prove battery life and signal in a real location.
+4. **One hardware prototype.** ESP32 + load cell (HX711) + LTE-M modem. POST the
+   same `/api/readings` contract. Prove battery life and signal in a real location.
 5. **5–10 unit pilot** with one friendly station. Measure: fewer empties, fewer
    wasted trips. That number is the pitch.
 6. **Scale**: provisioning flow, fleet health (battery/stale device alerts —
